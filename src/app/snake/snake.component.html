@@ -1,0 +1,10 @@
+<div id="container" *ngIf="!gameStarted">
+    <h1>Snake Game</h1>
+
+
+    <button (click)="startGame()">Start Game</button>
+</div>
+<div class="canvas-container">
+    <h2>Score: {{ score }}</h2>
+    <canvas #screen id="screen"></canvas>
+</div>
