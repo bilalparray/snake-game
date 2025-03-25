@@ -1,7 +1,7 @@
 <div id="game-container">
     <!-- Score Display at the Top -->
     <div id="score">
-        <h2>Score: {{ score }}</h2>
+        <p>Score: {{ score }}</p>
     </div>
 
     <!-- Canvas: in the middle -->
@@ -11,12 +11,12 @@
 
     <!-- On-Screen Control Buttons at the Bottom -->
     <div id="controls">
-        <button (click)="moveUp()">Up</button>
+        <button (click)="moveUp()" type="button">Up</button>
         <div class="horizontal-controls">
-            <button (click)="moveLeft()">Left</button>
-            <button (click)="moveRight()">Right</button>
+            <button (click)="moveLeft()" type="button">Left</button>
+            <button (click)="moveRight()" type="button">Right</button>
         </div>
-        <button (click)="moveDown()">Down</button>
+        <button (click)="moveDown()" type="button">Down</button>
     </div>
 
     <!-- Start Game Button (shown only before game starts) -->
