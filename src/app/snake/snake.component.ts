@@ -31,20 +31,20 @@ export class SnakeComponent implements AfterViewInit {
   private ctx!: CanvasRenderingContext2D;
   private snake: Point[] = [];
   private gridSize: number = 20;
-  // Instead of storing separate speeds, we now store the overall current speed.
+  // currentSpeed is in pixels/second; using discrete updates, time per cell = gridSize/currentSpeed.
   private currentSpeed: number = 100;
-  private xVelocity: number = 100;
-  private yVelocity: number = 0;
+  // Direction stored as cell offset (1, 0), (0, 1), etc.
+  private direction = { x: 1, y: 0 };
+
   private food: Point = { x: 0, y: 0 };
   private gameOver: boolean = false;
   private lastTime: number = 0;
+  // Use an accumulator to decide when to move a full cell.
+  private accumulator: number = 0;
+  // For snake growth: additional cells to keep.
   private snakeGrowth: number = 0;
   private growthIncrement: number = 5;
   private initialLength: number = 9;
-
-  // For touch detection.
-  private touchStartX: number = 0;
-  private touchStartY: number = 0;
 
   constructor(@Inject(PLATFORM_ID) private platformId: Object) {}
 
@@ -66,8 +66,9 @@ export class SnakeComponent implements AfterViewInit {
 
   setCanvasDimensions() {
     const canvasEl = this.canvas.nativeElement;
-    canvasEl.width = window.innerWidth;
-    canvasEl.height = window.innerHeight;
+    // Fixed canvas size
+    canvasEl.width = 600;
+    canvasEl.height = 400;
   }
 
   startGame() {
@@ -75,17 +76,8 @@ export class SnakeComponent implements AfterViewInit {
       this.resetGame();
       this.gameStarted = true;
       this.lastTime = performance.now();
-      window.addEventListener('keydown', this.changeDirection.bind(this));
-      this.canvas.nativeElement.addEventListener(
-        'touchstart',
-        this.handleTouchStart.bind(this),
-        false
-      );
-      this.canvas.nativeElement.addEventListener(
-        'touchend',
-        this.handleTouchEnd.bind(this),
-        false
-      );
+      this.accumulator = 0;
+      window.addEventListener('keydown', this.changeDirection.bind(this)); // fallback keyboard control
       requestAnimationFrame((time) => this.gameLoop(time));
     }
   }
@@ -94,17 +86,25 @@ export class SnakeComponent implements AfterViewInit {
     this.score = 0;
     this.gameOver = false;
     this.snakeGrowth = 0;
-    this.currentSpeed = 100; // Reset overall speed.
+    this.currentSpeed = 100;
+    this.direction = { x: 1, y: 0 };
+
     const canvasEl = this.canvas.nativeElement;
-    const startX = canvasEl.width / 2;
-    const startY = canvasEl.height / 2;
+    const cols = Math.floor(canvasEl.width / this.gridSize);
+    const rows = Math.floor(canvasEl.height / this.gridSize);
+    // Compute center cell (the snake will always be centered in a cell)
+    const startCol = Math.floor(cols / 2);
+    const startRow = Math.floor(rows / 2);
+
+    // Set snake so that each segment occupies a cell.
     this.snake = [];
     for (let i = 0; i < this.initialLength; i++) {
-      this.snake.push({ x: startX - i * this.gridSize, y: startY });
+      // The head is at the center; subsequent segments extend to the left.
+      this.snake.push({
+        x: (startCol - i) * this.gridSize + this.gridSize / 2,
+        y: startRow * this.gridSize + this.gridSize / 2,
+      });
     }
-    // Set initial velocity to move right, using currentSpeed.
-    this.xVelocity = this.currentSpeed;
-    this.yVelocity = 0;
     this.createFood();
   }
 
@@ -114,14 +114,22 @@ export class SnakeComponent implements AfterViewInit {
       this.gameStarted = false;
       return;
     }
-    let deltaTime = (currentTime - this.lastTime) / 1000;
-    if (deltaTime < 0) deltaTime = 0;
-    deltaTime = Math.min(deltaTime, 0.05);
+    // Calculate deltaTime (in seconds)
+    const deltaTime = (currentTime - this.lastTime) / 1000;
     this.lastTime = currentTime;
+    this.accumulator += deltaTime;
 
-    this.updateSnake(deltaTime);
-    this.checkFoodCollision();
-    this.checkGameOver();
+    // Determine time per cell update
+    const timePerCell = this.gridSize / this.currentSpeed;
+
+    // Move discrete steps when enough time has accumulated.
+    while (this.accumulator >= timePerCell) {
+      this.updateSnake();
+      this.checkFoodCollision();
+      this.checkSelfCollision();
+      this.accumulator -= timePerCell;
+    }
+
     this.resetCanvas();
     this.drawFood();
     this.drawSnake();
@@ -129,99 +137,60 @@ export class SnakeComponent implements AfterViewInit {
     requestAnimationFrame((time) => this.gameLoop(time));
   }
 
-  resetCanvas() {
-    this.ctx.fillStyle = 'lightgray';
-    this.ctx.fillRect(
-      0,
-      0,
-      this.canvas.nativeElement.width,
-      this.canvas.nativeElement.height
-    );
-  }
+  updateSnake() {
+    const canvasEl = this.canvas.nativeElement;
+    const cols = Math.floor(canvasEl.width / this.gridSize);
+    const rows = Math.floor(canvasEl.height / this.gridSize);
 
-  private distance(a: Point, b: Point): number {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
+    // Determine current head cell
+    const head = this.snake[0];
+    const currentCol = Math.floor((head.x - this.gridSize / 2) / this.gridSize);
+    const currentRow = Math.floor((head.y - this.gridSize / 2) / this.gridSize);
 
-  updateSnake(deltaTime: number) {
+    // Compute new cell indices based on direction
+    let newCol = currentCol + this.direction.x;
+    let newRow = currentRow + this.direction.y;
+
+    // Wrap around horizontally and vertically
+    if (newCol < 0) newCol = cols - 1;
+    else if (newCol >= cols) newCol = 0;
+    if (newRow < 0) newRow = rows - 1;
+    else if (newRow >= rows) newRow = 0;
+
+    // New head is centered in the target cell
     const newHead: Point = {
-      x: this.snake[0].x + this.xVelocity * deltaTime,
-      y: this.snake[0].y + this.yVelocity * deltaTime,
+      x: newCol * this.gridSize + this.gridSize / 2,
+      y: newRow * this.gridSize + this.gridSize / 2,
     };
+
     this.snake.unshift(newHead);
 
-    let totalLength = 0;
-    for (let i = 0; i < this.snake.length - 1; i++) {
-      totalLength += this.distance(this.snake[i], this.snake[i + 1]);
-    }
-
-    const targetLength =
-      (this.initialLength + this.snakeGrowth) * this.gridSize;
-
-    while (totalLength > targetLength && this.snake.length > 1) {
-      const tailIndex = this.snake.length - 1;
-      const segLength = this.distance(
-        this.snake[tailIndex - 1],
-        this.snake[tailIndex]
-      );
-      if (totalLength - segLength >= targetLength) {
-        totalLength -= segLength;
-        this.snake.pop();
-      } else {
-        const excess = totalLength - targetLength;
-        const t = 1 - excess / segLength;
-        const prev = this.snake[tailIndex - 1];
-        const tail = this.snake[tailIndex];
-        this.snake[tailIndex] = {
-          x: prev.x + (tail.x - prev.x) * t,
-          y: prev.y + (tail.y - prev.y) * t,
-        };
-        totalLength = targetLength;
-      }
+    // Remove tail if snake hasn't grown enough.
+    while (this.snake.length > this.initialLength + this.snakeGrowth) {
+      this.snake.pop();
     }
   }
 
   checkFoodCollision() {
     const head = this.snake[0];
-    const threshold = 20;
-    const dx = head.x - this.food.x;
-    const dy = head.y - this.food.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < threshold) {
-      console.log('Food eaten! Distance:', dist);
+    // Collision if head is in the same cell as the food.
+    if (
+      Math.abs(head.x - this.food.x) < 1 &&
+      Math.abs(head.y - this.food.y) < 1
+    ) {
       this.score++;
       this.snakeGrowth += this.growthIncrement;
-      // Increase overall speed by 10 pixels per second.
+      // Increase speed (affects time per cell)
       this.currentSpeed += 10;
-      // Update velocity to reflect new speed while preserving direction.
-      if (this.xVelocity !== 0) {
-        this.xVelocity = Math.sign(this.xVelocity) * this.currentSpeed;
-        this.yVelocity = 0;
-      } else if (this.yVelocity !== 0) {
-        this.yVelocity = Math.sign(this.yVelocity) * this.currentSpeed;
-        this.xVelocity = 0;
-      }
       this.createFood();
     }
   }
 
-  checkGameOver() {
+  checkSelfCollision() {
     const head = this.snake[0];
-    const canvasEl = this.canvas.nativeElement;
-    if (
-      head.x < 0 ||
-      head.x >= canvasEl.width ||
-      head.y < 0 ||
-      head.y >= canvasEl.height
-    ) {
-      console.log('Head out of bounds!');
-      this.gameOver = true;
-    }
-    for (let i = 10; i < this.snake.length; i++) {
-      if (this.distance(head, this.snake[i]) < 10) {
-        console.log('Self collision detected at index:', i);
+    // Check collision with body segments (starting from index 1)
+    for (let i = 1; i < this.snake.length; i++) {
+      if (head.x === this.snake[i].x && head.y === this.snake[i].y) {
         this.gameOver = true;
         break;
       }
@@ -229,83 +198,119 @@ export class SnakeComponent implements AfterViewInit {
   }
 
   createFood() {
-    const cols = this.canvas.nativeElement.width;
-    const rows = this.canvas.nativeElement.height;
-    this.food.x = Math.random() * cols;
-    this.food.y = Math.random() * rows;
+    const canvasEl = this.canvas.nativeElement;
+    const cols = Math.floor(canvasEl.width / this.gridSize);
+    const rows = Math.floor(canvasEl.height / this.gridSize);
+    // Place food in a random cell
+    const foodCol = Math.floor(Math.random() * cols);
+    const foodRow = Math.floor(Math.random() * rows);
+    this.food = {
+      x: foodCol * this.gridSize + this.gridSize / 2,
+      y: foodRow * this.gridSize + this.gridSize / 2,
+    };
+
+    // Optional: Ensure food doesn't spawn on the snake.
+    // (You can add a loop here if needed.)
   }
 
   drawFood() {
     this.ctx.fillStyle = 'green';
-    const size = 20;
+    const size = this.gridSize;
     this.ctx.beginPath();
-    this.ctx.arc(this.food.x, this.food.y, size / 2, 0, Math.PI * 2);
+    // Draw food as a slightly smaller circle inside the cell.
+    this.ctx.arc(this.food.x, this.food.y, size * 0.4, 0, Math.PI * 2);
     this.ctx.fill();
   }
 
   drawSnake() {
+    // Set drawing styles.
     this.ctx.strokeStyle = 'black';
-    this.ctx.lineWidth = 20;
+    this.ctx.lineWidth = this.gridSize * 0.8;
     this.ctx.lineJoin = 'round';
     this.ctx.lineCap = 'round';
+
+    // Begin a new path.
     this.ctx.beginPath();
     this.ctx.moveTo(this.snake[0].x, this.snake[0].y);
+
     for (let i = 1; i < this.snake.length; i++) {
-      this.ctx.lineTo(this.snake[i].x, this.snake[i].y);
+      const prev = this.snake[i - 1];
+      const curr = this.snake[i];
+
+      // Determine differences.
+      const dx = Math.abs(curr.x - prev.x);
+      const dy = Math.abs(curr.y - prev.y);
+
+      // If the gap is larger than a single grid cell, it indicates a wrap-around.
+      if (dx > this.gridSize || dy > this.gridSize) {
+        // Stroke current path then start a new one.
+        this.ctx.stroke();
+        this.ctx.beginPath();
+        this.ctx.moveTo(curr.x, curr.y);
+      } else {
+        this.ctx.lineTo(curr.x, curr.y);
+      }
     }
     this.ctx.stroke();
 
+    // Draw the snake head accent.
     this.ctx.fillStyle = 'green';
     const head = this.snake[0];
     this.ctx.beginPath();
-    this.ctx.arc(head.x, head.y, 10, 0, Math.PI * 2);
+    this.ctx.arc(head.x, head.y, this.gridSize * 0.4, 0, Math.PI * 2);
     this.ctx.fill();
   }
 
+  // Fallback keyboard control; on-screen buttons remain primary.
   changeDirection(event: KeyboardEvent) {
     const key = event.key;
-    // Update velocity based on currentSpeed.
-    if (key === 'ArrowLeft') {
-      this.xVelocity = -this.currentSpeed;
-      this.yVelocity = 0;
-    } else if (key === 'ArrowUp') {
-      this.xVelocity = 0;
-      this.yVelocity = -this.currentSpeed;
-    } else if (key === 'ArrowRight') {
-      this.xVelocity = this.currentSpeed;
-      this.yVelocity = 0;
-    } else if (key === 'ArrowDown') {
-      this.xVelocity = 0;
-      this.yVelocity = this.currentSpeed;
+    if (key === 'ArrowLeft' && this.direction.x !== 1) {
+      this.direction = { x: -1, y: 0 };
+    } else if (key === 'ArrowUp' && this.direction.y !== 1) {
+      this.direction = { x: 0, y: -1 };
+    } else if (key === 'ArrowRight' && this.direction.x !== -1) {
+      this.direction = { x: 1, y: 0 };
+    } else if (key === 'ArrowDown' && this.direction.y !== -1) {
+      this.direction = { x: 0, y: 1 };
     }
   }
 
-  handleTouchStart(evt: TouchEvent) {
-    const touch = evt.changedTouches[0];
-    this.touchStartX = touch.pageX;
-    this.touchStartY = touch.pageY;
+  // On-screen button controls.
+  moveLeft() {
+    if (this.direction.x !== 1) this.direction = { x: -1, y: 0 };
   }
 
-  handleTouchEnd(evt: TouchEvent) {
-    const touch = evt.changedTouches[0];
-    const dx = touch.pageX - this.touchStartX;
-    const dy = touch.pageY - this.touchStartY;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > 0) {
-        this.xVelocity = this.currentSpeed;
-        this.yVelocity = 0;
-      } else {
-        this.xVelocity = -this.currentSpeed;
-        this.yVelocity = 0;
-      }
-    } else {
-      if (dy > 0) {
-        this.xVelocity = 0;
-        this.yVelocity = this.currentSpeed;
-      } else {
-        this.xVelocity = 0;
-        this.yVelocity = -this.currentSpeed;
-      }
+  moveUp() {
+    if (this.direction.y !== 1) this.direction = { x: 0, y: -1 };
+  }
+
+  moveRight() {
+    if (this.direction.x !== -1) this.direction = { x: 1, y: 0 };
+  }
+
+  moveDown() {
+    if (this.direction.y !== -1) this.direction = { x: 0, y: 1 };
+  }
+
+  resetCanvas() {
+    const canvasEl = this.canvas.nativeElement;
+    // Fill background and draw grid.
+    this.ctx.fillStyle = '#f0f8ff';
+    this.ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+
+    this.ctx.strokeStyle = '#e0e0e0';
+    this.ctx.lineWidth = 1;
+    for (let x = 0; x <= canvasEl.width; x += this.gridSize) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, 0);
+      this.ctx.lineTo(x, canvasEl.height);
+      this.ctx.stroke();
+    }
+    for (let y = 0; y <= canvasEl.height; y += this.gridSize) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(0, y);
+      this.ctx.lineTo(canvasEl.width, y);
+      this.ctx.stroke();
     }
   }
 }

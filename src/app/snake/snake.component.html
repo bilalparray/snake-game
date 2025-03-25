@@ -1,10 +1,27 @@
-<div id="container" *ngIf="!gameStarted">
-    <h1>Snake Game</h1>
+<div id="game-container">
+    <!-- Score Display at the Top -->
+    <div id="score">
+        <h2>Score: {{ score }}</h2>
+    </div>
 
+    <!-- Canvas: in the middle -->
+    <div class="canvas-wrapper">
+        <canvas #screen id="screen"></canvas>
+    </div>
 
-    <button (click)="startGame()">Start Game</button>
-</div>
-<div class="canvas-container">
-    <h2>Score: {{ score }}</h2>
-    <canvas #screen id="screen"></canvas>
+    <!-- On-Screen Control Buttons at the Bottom -->
+    <div id="controls">
+        <button (click)="moveUp()">Up</button>
+        <div class="horizontal-controls">
+            <button (click)="moveLeft()">Left</button>
+            <button (click)="moveRight()">Right</button>
+        </div>
+        <button (click)="moveDown()">Down</button>
+    </div>
+
+    <!-- Start Game Button (shown only before game starts) -->
+    <div id="start-container" *ngIf="!gameStarted">
+        <h1>Snake Game</h1>
+        <button (click)="startGame()">Start Game</button>
+    </div>
 </div>
